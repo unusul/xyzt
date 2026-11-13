@@ -131,6 +131,15 @@
                 </form>
             </div>
         </section>
+
+        <!-- Reached only by typing #admin: the database, not this page, decides who may read. -->
+        <section id="view-admin" class="view" hidden>
+            <div class="view-head">
+                <h1>Admin</h1>
+                <button type="button" class="btn ghost sm" id="admin-signout" data-i18n="admin_signout" hidden>Sign out</button>
+            </div>
+            <div id="admin-body" class="stack"></div>
+        </section>
     </div>
 
     <nav class="tabs" id="tabs">

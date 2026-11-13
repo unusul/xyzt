@@ -3,9 +3,10 @@ import { t, setLanguage, initialLanguage } from './i18n.js';
 import * as api from './api.js';
 import { getCurrentLocation } from './geofeed.js';
 import { renderFeed, renderStatus, tickTimers, toast } from './ui.js';
+import { captureLinkResult } from './auth.js';
 
 const $ = id => document.getElementById(id);
-const VIEWS = ['space', 'time', 'map', 'me'];
+const VIEWS = ['space', 'time', 'map', 'me', 'admin'];
 const DEFAULT_LABEL = 'time';
 const store = {
     get(key, fallback = null) { try { return localStorage.getItem(key) ?? fallback; } catch { return fallback; } },
@@ -48,14 +49,14 @@ function labelMinutes(name) {
 // --- Routing: "/" is Space, "/<label>" a label, "#map" and "#me" the other two views ----------------------------
 function readLocation() {
     const hash = location.hash.slice(1);
-    if (hash === 'map' || hash === 'me') return { view: hash };
+    if (hash === 'map' || hash === 'me' || hash === 'admin') return { view: hash };
     const segment = decodeURIComponent(location.pathname.slice(BASE.length)).split('/')[0];
     const name = /\.html$/.test(segment) ? '' : cleanLabel(segment);
     return name ? { view: 'time', label: name } : { view: 'space' };
 }
 
 function urlFor(target, name = label) {
-    return { space: BASE, time: BASE + name, map: `${BASE}#map`, me: `${BASE}#me` }[target];
+    return { space: BASE, time: BASE + name, map: `${BASE}#map`, me: `${BASE}#me`, admin: `${BASE}#admin` }[target];
 }
 
 function navigate(target, name) {
@@ -78,7 +79,7 @@ function show() {
     });
     $('fab').hidden = view !== 'space' && view !== 'time';
     document.title = view === 'time' ? `#${label} · xyzt` : 'xyzt · spacetime';
-    ({ space: loadSpace, time: showTime, map: showMap, me: showMe })[view]();
+    ({ space: loadSpace, time: showTime, map: showMap, me: showMe, admin: showAdmin })[view]();
 }
 
 // --- Space ----------------------------------------------------------------------------------------------------
@@ -255,6 +256,15 @@ async function sendContact(event) {
     }
 }
 
+// --- Admin: its code is loaded only when someone opens #admin -----------------------------------------------------
+let linkError = null;
+
+async function showAdmin() {
+    const admin = await import('./admin.js');
+    admin.showAdmin($('admin-body'), $('admin-signout'), linkError);
+    linkError = null;
+}
+
 // --- Compose --------------------------------------------------------------------------------------------------
 function openCompose() {
     $('compose-context').textContent = view === 'space' ? t('compose_space') : t('compose_time', { label, n: labelMinutes(label) });
@@ -354,6 +364,13 @@ setInterval(() => {
     }
     checkSubscriptions();
 }, 60000);
+
+// Coming back from the e-mailed sign-in link: keep the session, drop the tokens from the address, open the admin page.
+const linkResult = captureLinkResult();
+if (linkResult) {
+    if (linkResult !== 'signed-in') linkError = linkResult;
+    history.replaceState({}, '', urlFor('admin'));
+}
 
 setLanguage(lang);
 show();

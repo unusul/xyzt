@@ -129,6 +129,13 @@ input::placeholder, textarea::placeholder { color: var(--muted) }
 @media (prefers-color-scheme: dark) { :root:not([data-theme="light"]) .leaflet-tile-pane { filter: invert(1) hue-rotate(180deg) brightness(.9) contrast(.9) } }
 :root[data-theme="dark"] .leaflet-tile-pane { filter: invert(1) hue-rotate(180deg) brightness(.9) contrast(.9) }
 
+/* Admin */
+.admin-row { display: grid; gap: 8px; padding: 12px 0; border-top: 1px solid var(--line) }
+.admin-row-head { display: flex; gap: 10px; align-items: center; justify-content: space-between }
+.admin-row-head span { min-width: 0; overflow-wrap: anywhere }
+.admin-thumb { max-height: 160px; max-width: 100%; border-radius: 10px; justify-self: start }
+.btn.danger { color: var(--bad); border-color: var(--bad); flex: none }
+
 /* Compose */
 .fab { position: fixed; right: max(18px, env(safe-area-inset-right)); bottom: calc(var(--nav-h) + 14px + env(safe-area-inset-bottom)); width: 58px; height: 58px;
   display: grid; place-items: center; border: 0; border-radius: 18px; background: var(--accent); color: var(--accent-ink); cursor: pointer; box-shadow: 0 8px 24px rgb(0 0 0 / .22); z-index: 4 }
