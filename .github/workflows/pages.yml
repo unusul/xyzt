@@ -1,0 +1,39 @@
+# Publishes the content of public/ on GitHub Pages at https://unusul.github.io/xyzt/ on every push to master.
+# There is nothing to build: the app is plain HTML, CSS and JavaScript modules.
+# Settings → Pages → Source must be "GitHub Actions".
+name: Publish to GitHub Pages
+
+on:
+  push:
+    branches: [master]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+concurrency:
+  group: pages
+  cancel-in-progress: true
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      # Pages has no rewrite rules: a label opened directly (/xyzt/music) gets the app instead of a 404 page.
+      - run: cp public/index.html public/404.html
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: public
+
+  deploy:
+    needs: build
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - id: deployment
+        uses: actions/deploy-pages@v4

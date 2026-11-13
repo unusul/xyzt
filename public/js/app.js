@@ -1,395 +1,359 @@
-import { dictionary, setLanguage } from './i18n.js';
-import { publish, fetchSpacePosts, fetchTimePosts, fetchRecentLabels, sendContactMessage } from './api.js';
+import { BASE } from './config.js';
+import { t, setLanguage, initialLanguage } from './i18n.js';
+import * as api from './api.js';
 import { getCurrentLocation } from './geofeed.js';
-import { renderFeed } from './ui.js';
-const viewProfile = document.getElementById('view-profile');
-const viewFaq = document.getElementById('view-faq');
-const publishSection = document.getElementById('publish-section');
-const mainToggles = document.getElementById('main-toggles');
-const path = window.location.pathname.substring(1); 
-const viewSpace = document.getElementById('view-space');
-const viewTime = document.getElementById('view-time');
-const btnSpace = document.getElementById('mode-space');
-const btnTime = document.getElementById('mode-time');
-const btnPublish = document.getElementById('btn-publish');
-const btnSubscribe = document.getElementById('btn-subscribe');
-const viewContact = document.getElementById('view-contact');
+import { renderFeed, renderStatus, tickTimers, toast } from './ui.js';
 
-// Array locale memorizzato nel telefono per le label preferite da ascoltare
-let subscribedLabels = JSON.parse(localStorage.getItem('xyzt_subscriptions') || '[]');
+const $ = id => document.getElementById(id);
+const VIEWS = ['space', 'time', 'map', 'me'];
+const DEFAULT_LABEL = 'time';
+const store = {
+    get(key, fallback = null) { try { return localStorage.getItem(key) ?? fallback; } catch { return fallback; } },
+    set(key, value) { try { localStorage.setItem(key, value); } catch { /* private mode */ } }
+};
 
-// --- GESTIONE IDENTITA' DISPOSITIVO ---
-let myAuthorId = localStorage.getItem('xyzt_author_id');
-if (!myAuthorId) {
-    // Genera un ID casuale es: "a7f2b9" al primo accesso
-    myAuthorId = Math.random().toString(16).substring(2, 8);
-    localStorage.setItem('xyzt_author_id', myAuthorId);
-}
+let view = 'space';
+let label = cleanLabel(store.get('xyzt_last_label', '')) || DEFAULT_LABEL;
+let lang = initialLanguage();
 
-let myDeviceId = localStorage.getItem('xyzt_device_id');
-if (!myDeviceId) {
-    myDeviceId = Math.random().toString(16).substring(2, 8);
-    localStorage.setItem('xyzt_device_id', myDeviceId);
-}
-
-// Carica il nick al riavvio
-document.getElementById('input-nickname').value = localStorage.getItem('xyzt_nickname') || '';
-
-document.getElementById('home-link').addEventListener('click', (e) => {
-    e.preventDefault();
-    window.history.pushState({}, "", "/");
-    showSpace();
-});
-
-// Salva Profilo
-document.getElementById('btn-save-profile').addEventListener('click', () => {
-    const nick = document.getElementById('input-nickname').value.trim();
-    if (nick) {
-        localStorage.setItem('xyzt_nickname', nick);
-        // Usa il dizionario per l'alert
-        const lang = document.getElementById('lang-selector').value;
-        alert(dictionary[lang].profile_saved_alert);
-        showSpace(); 
+// --- Identity: a code per device, plus the nickname the person chose -----------------------------------------
+function deviceId() {
+    let id = store.get('xyzt_device_id');
+    if (!id) {
+        id = Array.from(crypto.getRandomValues(new Uint8Array(3)), byte => byte.toString(16).padStart(2, '0')).join('');
+        store.set('xyzt_device_id', id);
     }
-});
-
-// Inizializzazione al caricamento della pagina
-if (path === '' || path === 'time') {
-    showSpace();
-} else {
-    showTime(path);
+    return id;
 }
 
-// Eventi dei bottoni Toggle (Spazio / Tempo)
-btnSpace.addEventListener('click', () => {
-    window.history.pushState({}, "", "/");
-    showSpace();
-});
-
-btnTime.addEventListener('click', () => {
-    const defaultLabel = 'time';
-    window.history.pushState({}, "", `/${defaultLabel}`);
-    showTime(defaultLabel);
-});
-
-// Evento Selettore Lingua
-document.getElementById('lang-selector').addEventListener('change', (e) => {
-    setLanguage(e.target.value);
-});
-
-// Funzioni di visualizzazione
-function hideAllViews() {
-    viewSpace.style.display = 'none';
-    viewTime.style.display = 'none';
-    viewProfile.style.display = 'none';
-    viewFaq.style.display = 'none';
-    viewContact.style.display = 'none';     
-    const viewMap = document.getElementById('view-map');
-    if (viewMap) viewMap.style.display = 'none';    
-    publishSection.style.display = 'block';
-    mainToggles.style.display = 'flex';
+function authorId() {
+    const nick = store.get('xyzt_nickname', '');
+    return nick ? `${nick}(${deviceId()})` : deviceId();
 }
 
-function showSpace() {
-    hideAllViews();
-    viewSpace.style.display = 'block';
-    btnSpace.classList.add('active');
-    btnTime.classList.remove('active');
-    loadSpaceFeed();
+// --- Labels ---------------------------------------------------------------------------------------------------
+function cleanLabel(text) {
+    return (text || '').toLowerCase().replace(/[^a-z0-9]/g, '').slice(0, 40);
 }
 
-function showTime(label) {
-    hideAllViews();
-    viewTime.style.display = 'block';
-    btnSpace.classList.remove('active');
-    btnTime.classList.add('active');
-    document.getElementById('current-label').innerText = label;
-	updateSubscribeButton(label);
-    loadRecentLabels();
-    loadTimeFeed(label); 
+// Display only: the database computes the real expiry with the same curve (public.label_value).
+function labelMinutes(name) {
+    const length = name.length;
+    if (length === 7) return 110;
+    if (length >= 1 && length < 7) return 10 + Math.floor(1 + (99 / 6) * (length - 1));
+    if (length > 7 && length <= 30) return 10 + Math.floor(100 - (99 / 23) * (length - 7));
+    return 11;
 }
 
-// Navigazione Menu Alto
-document.getElementById('nav-profile').addEventListener('click', (e) => {
-    e.preventDefault();
-    hideAllViews();
-    publishSection.style.display = 'none';
-    mainToggles.style.display = 'none';
-    viewProfile.style.display = 'block';
-});
+// --- Routing: "/" is Space, "/<label>" a label, "#map" and "#me" the other two views ----------------------------
+function readLocation() {
+    const hash = location.hash.slice(1);
+    if (hash === 'map' || hash === 'me') return { view: hash };
+    const segment = decodeURIComponent(location.pathname.slice(BASE.length)).split('/')[0];
+    const name = /\.html$/.test(segment) ? '' : cleanLabel(segment);
+    return name ? { view: 'time', label: name } : { view: 'space' };
+}
 
-document.getElementById('nav-faq').addEventListener('click', (e) => {
-    e.preventDefault();
-    hideAllViews();
-    publishSection.style.display = 'none';
-    mainToggles.style.display = 'none';
-    viewFaq.style.display = 'block';
-});
+function urlFor(target, name = label) {
+    return { space: BASE, time: BASE + name, map: `${BASE}#map`, me: `${BASE}#me` }[target];
+}
 
-// Naviga a una nuova Label
-document.getElementById('btn-go-label').addEventListener('click', () => {
-    let newLabel = document.getElementById('input-search-label').value.trim().toLowerCase();
-    if (newLabel) {
-        // Rimuove spazi vuoti e caratteri strani
-        newLabel = newLabel.replace(/[^a-z0-9]/g, ''); 
-        document.getElementById('input-search-label').value = '';
-        window.history.pushState({}, "", `/${newLabel}`);
-        showTime(newLabel);
+function navigate(target, name) {
+    history.pushState({}, '', urlFor(target, name));
+    show();
+}
+
+function show() {
+    const target = readLocation();
+    view = target.view;
+    if (target.label) {
+        label = target.label;
+        store.set('xyzt_last_label', label);
     }
-});
-
-let map = null;
-
-document.getElementById('nav-map').addEventListener('click', async (e) => {
-    e.preventDefault();
-    hideAllViews(); // La tua funzione che nasconde gli altri main
-    document.getElementById('publish-section').style.display = 'none';
-    document.getElementById('main-toggles').style.display = 'none';
-    const mapView = document.getElementById('view-map');
-    mapView.style.display = 'block';
-
-    const coords = await getCurrentLocation(); // Cache o GPS lineare
-
-    // Inizializza la mappa se non esiste
-    if (!map) {
-        map = L.map('view-map').setView([coords.lat, coords.lon], 13);
-        L.tileLayer('https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png', {
-            attribution: 'OpenStreetMap & CartoDB'
-        }).addTo(map);
-    } else {
-        map.setView([coords.lat, coords.lon], 13);
-    }
-
-    // Disegna i punti dei post recuperati dal backend
-    const response = await fetch('/api/space/map-points');
-    const points = await response.json();
-
-    points.forEach(p => {
-        L.circleMarker([p.lat, p.lon], {
-            color: '#8a2be2',
-            radius: 6,
-            fillOpacity: 0.8
-        }).addTo(map);
+    VIEWS.forEach(name => { $(`view-${name}`).hidden = name !== view; });
+    document.querySelectorAll('#tabs a').forEach(tab => {
+        if (tab.dataset.view === view) tab.setAttribute('aria-current', 'page');
+        else tab.removeAttribute('aria-current');
+        tab.href = urlFor(tab.dataset.view);
     });
-});
-
-// Richiesta permessi notifiche browser
-if (customElements && Notification.permission === "default") {
-    Notification.requestPermission();
+    $('fab').hidden = view !== 'space' && view !== 'time';
+    document.title = view === 'time' ? `#${label} · xyzt` : 'xyzt · spacetime';
+    ({ space: loadSpace, time: showTime, map: showMap, me: showMe })[view]();
 }
 
-// Funzione di supporto per iscriversi/disiscriversi da una stanza
-function toggleSubscription(label) {
-    if (subscribedLabels.includes(label)) {
-        subscribedLabels = subscribedLabels.filter(l => l !== label);
-    } else {
-        subscribedLabels.push(label);
-    }
-    localStorage.setItem('xyzt_subscriptions', JSON.stringify(subscribedLabels));
-    
-    const lang = document.getElementById('lang-selector').value;
-    alert(`${dictionary[lang].notif_updated} #${label}`);
+// --- Space ----------------------------------------------------------------------------------------------------
+// The browser reports why it has no position with a code (1 denied, 2 unavailable, 3 timeout) and English text.
+function gpsMessage(error) {
+    const key = { 1: 'gps_denied', 2: 'gps_unavailable', 3: 'gps_timeout' }[error.code];
+    return key ? t(key) : t('gps_error', { msg: error.message });
 }
 
-function updateSubscribeButton(label) {
-    if (!btnSubscribe) return;
-    
-    const lang = document.getElementById('lang-selector').value;
-    
-    if (subscribedLabels.includes(label)) {
-        btnSubscribe.innerText = dictionary[lang].btn_stop_listen;
-        btnSubscribe.style.color = "#ff4757";       
-        btnSubscribe.style.borderColor = "#ff4757";
-    } else {
-        btnSubscribe.innerText = dictionary[lang].btn_listen;
-        btnSubscribe.style.color = "#ffeb3b";       
-        btnSubscribe.style.borderColor = "#ffeb3b";
-    }
-}
-
-// Evento al click sul bottone
-btnSubscribe.addEventListener('click', () => {
-    const currentLabel = document.getElementById('current-label').innerText;
-    if (!currentLabel) return;
-    
-    toggleSubscription(currentLabel); // Aggiunge/Rimuove dall'array
-    updateSubscribeButton(currentLabel); // Aggiorna i colori del bottone
-});
-
-// Ciclo in background lato Client (Gira ogni 30 secondi sul telefono dell'utente)
-setInterval(async () => {
-    if (Notification.permission !== "granted" || subscribedLabels.length === 0) return;
-
-    for (const label of subscribedLabels) {
-        const response = await fetch(`/api/time/${label}`);
-        const posts = await response.json();
-        
-        if (posts.length > 0) {
-            const ultimoPost = posts[0];
-            const ultimoIdNotificato = localStorage.getItem(`notif_last_id_${label}`);
-
-            // Se c'è un nuovo post che non abbiamo mai visto, manda la notifica di sistema
-            if (ultimoPost.id !== ultimoIdNotificato) {
-                localStorage.setItem(`notif_last_id_${label}`, ultimoPost.id);
-                
-                new Notification(`xyzt: Nuova trasmissione in #${label}`, {
-                    body: ultimoPost.content,
-                    icon: '/favicon.ico' // opzionale
-                });
-            }
-        }
-    }
-}, 60000); // Controlla le stanze preferite ogni 60 secondi
-
-// Forza Refresh GPS
-document.getElementById('btn-refresh-gps').addEventListener('click', async () => {
-    const containerId = 'space-feed';
-    document.getElementById(containerId).innerHTML = '<p class="empty-feed">Ricalibrazione GPS (ignorando la cache)...</p>';
+async function loadSpace({ forceGps = false, quiet = false } = {}) {
+    const feed = $('space-feed');
+    const button = $('btn-refresh-gps');
+    if (!quiet) renderStatus(feed, t('gps_searching'));
+    button.classList.add('busy');
     try {
-        const coords = await getCurrentLocation(true); // true forza il refresh
-        const posts = await fetchSpacePosts(coords.lat, coords.lon);
-        renderFeed(containerId, posts);
-    } catch (e) {
-        document.getElementById(containerId).innerHTML = `<p class="empty-feed">Errore GPS: ${e.message}</p>`;
+        let coords;
+        try {
+            coords = await getCurrentLocation(forceGps);
+        } catch (error) {
+            if (!quiet) renderStatus(feed, gpsMessage(error), { label: t('retry'), run: () => loadSpace({ forceGps: true }) });
+            return;
+        }
+        renderFeed(feed, await api.fetchSpacePosts(coords.lat, coords.lon));
+    } catch (error) {
+        if (!quiet) renderStatus(feed, t('load_error', { msg: error.message }), { label: t('retry'), run: () => loadSpace() });
+    } finally {
+        button.classList.remove('busy');
     }
-});
+}
+
+// --- Time -----------------------------------------------------------------------------------------------------
+function showTime() {
+    $('current-label').textContent = label;
+    $('time-sub').textContent = t('time_sub', { n: labelMinutes(label) });
+    updateSubscribeButton();
+    loadRecentLabels();
+    loadTime();
+}
+
+async function loadTime({ quiet = false } = {}) {
+    const shown = label;
+    const feed = $('time-feed');
+    if (!quiet) renderStatus(feed, t('loading'));
+    try {
+        const posts = await api.fetchTimePosts(shown);
+        if (shown === label) renderFeed(feed, posts);
+    } catch (error) {
+        if (!quiet && shown === label) renderStatus(feed, t('load_error', { msg: error.message }), { label: t('retry'), run: () => loadTime() });
+    }
+}
 
 async function loadRecentLabels() {
-    const labels = await fetchRecentLabels();
-    const container = document.getElementById('recent-labels');
-    container.innerHTML = '';
-    
-    labels.forEach(l => {
-        const btn = document.createElement('button');
-        btn.className = 'label-pill';
-        btn.innerText = `#${l.category_id}`;
-        btn.addEventListener('click', () => {
-            window.history.pushState({}, "", `/${l.category_id}`);
-            showTime(l.category_id);
-        });
-        container.appendChild(btn);
+    let labels = [];
+    try {
+        labels = await api.fetchRecentLabels();
+    } catch { /* the list is a shortcut: without it the page still works */ }
+    const pills = labels.map(row => {
+        const pill = document.createElement('button');
+        pill.type = 'button';
+        pill.className = 'pill';
+        pill.textContent = `#${row.category_id}`;
+        pill.addEventListener('click', () => navigate('time', row.category_id));
+        return pill;
     });
+    $('recent-labels').replaceChildren(...pills);
+    $('recent-block').hidden = pills.length === 0;
 }
 
-// Logica di caricamento dei Feed
-async function loadSpaceFeed() {
-    const containerId = 'space-feed';
-    document.getElementById(containerId).innerHTML = '<p class="empty-feed">Ricerca coordinate in corso...</p>';
-    try {
-        const coords = await getCurrentLocation();
-        const posts = await fetchSpacePosts(coords.lat, coords.lon);
-        renderFeed(containerId, posts);
-    } catch (e) {
-        document.getElementById(containerId).innerHTML = `<p class="empty-feed">Impossibile ottenere la posizione: ${e.message}</p>`;
+// --- Notifications for labels the person follows: checked from this page while it is open ----------------------
+let subscriptions = [];
+try { subscriptions = JSON.parse(store.get('xyzt_subscriptions', '[]')) || []; } catch { subscriptions = []; }
+
+function updateSubscribeButton() {
+    const on = subscriptions.includes(label);
+    $('btn-subscribe').textContent = t(on ? 'btn_stop_listen' : 'btn_listen');
+    $('btn-subscribe').classList.toggle('on', on);
+    $('btn-subscribe').hidden = !('Notification' in window);
+}
+
+async function toggleSubscription() {
+    const name = label;
+    if (subscriptions.includes(name)) {
+        subscriptions = subscriptions.filter(item => item !== name);
+        toast(t('notif_off', { label: name }));
+    } else {
+        const permission = Notification.permission === 'default' ? await Notification.requestPermission() : Notification.permission;
+        if (permission !== 'granted') return toast(t('notif_denied'), 'bad');
+        subscriptions.push(name);
+        // Start from what is already there: only posts written from now on raise a notification.
+        const newest = (await api.fetchTimePosts(name).catch(() => []))[0];
+        if (newest) store.set(`notif_last_id_${name}`, newest.id);
+        toast(t('notif_on', { label: name }));
+    }
+    store.set('xyzt_subscriptions', JSON.stringify(subscriptions));
+    updateSubscribeButton();
+}
+
+async function checkSubscriptions() {
+    if (!('Notification' in window) || Notification.permission !== 'granted') return;
+    for (const name of subscriptions) {
+        const newest = (await api.fetchTimePosts(name).catch(() => []))[0];
+        if (!newest || newest.id === store.get(`notif_last_id_${name}`)) continue;
+        store.set(`notif_last_id_${name}`, newest.id);
+        new Notification(t('notif_title', { label: name }), { body: newest.content || '', icon: 'favicon.svg' });
     }
 }
 
-async function loadTimeFeed(label) {
-    const containerId = 'time-feed';
-    document.getElementById(containerId).innerHTML = '<p class="empty-feed">Caricamento dimensione tempo...</p>';
-    const posts = await fetchTimePosts(label);
-    renderFeed(containerId, posts);
+// --- Map ------------------------------------------------------------------------------------------------------
+let map = null;
+let markers = null;
+
+// OpenStreetMap's own tiles (the CARTO ones the app used now ask for an API key); the dark theme darkens them in CSS.
+function addTiles() {
+    L.tileLayer('https://tile.openstreetmap.org/{z}/{x}/{y}.png', {
+        attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors', maxZoom: 19
+    }).addTo(map);
 }
 
-// Logica del pulsante PUBBLICA
-btnPublish.addEventListener('click', async () => {
-    const isSpaceMode = viewSpace.style.display !== 'none';
-    const content = document.getElementById('post-content').value;
-    const fileInput = document.getElementById('post-media').files[0];
-    
-    if (!content && !fileInput) return alert("Inserisci un testo o una foto!");
+function drawPoints(points) {
+    const colour = getComputedStyle(document.documentElement).getPropertyValue('--accent').trim();
+    markers.clearLayers();
+    points.forEach(point => L.circleMarker([point.lat, point.lon], { color: colour, weight: 2, radius: 7, fillOpacity: 0.7 }).addTo(markers));
+}
 
-    // Disabilita il bottone durante l'invio
-    btnPublish.disabled = true;
-    btnPublish.innerText = "Pubblicazione...";
-
-    const savedNick = localStorage.getItem('xyzt_nickname');
-    const myDeviceId = localStorage.getItem('xyzt_device_id');
-    
-    // Formato richiesto: Nickname(ID) o solo ID se il nick è assente
-    const finalAuthorId = savedNick ? `${savedNick}(${myDeviceId})` : myDeviceId;
-    
-    const formData = new FormData();
-    formData.append('content', content);
-    formData.append('author_id', finalAuthorId); // Invia l'ID combinato
-    
-    if (fileInput) formData.append('media', fileInput);
-
+async function showMap() {
+    if (!window.L) return;
+    if (!map) {
+        map = L.map('map').setView([42.5, 12.5], 5);
+        markers = L.layerGroup().addTo(map);
+        addTiles();
+    }
+    map.invalidateSize();
+    getCurrentLocation().then(coords => map.setView([coords.lat, coords.lon], 13)).catch(() => { /* stay on the wide view */ });
     try {
-        if (isSpaceMode) {
-            // Pubblica nello SPAZIO
-            const coords = await getCurrentLocation();
-            formData.append('lat', coords.lat);
-            formData.append('lon', coords.lon);
-            await publish('space', formData);
-            
-            // Ripulisci il modulo e aggiorna
-            document.getElementById('post-content').value = '';
-            document.getElementById('post-media').value = '';
-            loadSpaceFeed();
+        drawPoints(await api.fetchMapPoints());
+    } catch (error) {
+        toast(t('load_error', { msg: error.message }), 'bad');
+    }
+}
+
+// --- Me: nickname, language, theme, contact ---------------------------------------------------------------------
+function showMe() {
+    $('profile-desc').textContent = t('profile_desc', { id: deviceId() });
+    $('input-nickname').value = store.get('xyzt_nickname', '');
+    document.querySelectorAll('#lang-seg button').forEach(button => button.setAttribute('aria-pressed', String(button.dataset.lang === lang)));
+    const theme = store.get('xyzt_theme', 'auto');
+    document.querySelectorAll('#theme-seg button').forEach(button => button.setAttribute('aria-pressed', String(button.dataset.themeChoice === theme)));
+}
+
+function setTheme(choice) {
+    store.set('xyzt_theme', choice);
+    if (choice === 'auto') delete document.documentElement.dataset.theme;
+    else document.documentElement.dataset.theme = choice;
+    showMe();
+}
+
+async function sendContact(event) {
+    event.preventDefault();
+    const message = $('contact-message').value.trim();
+    if (!message) return toast(t('contact_need_msg'), 'bad');
+    const button = $('btn-send-contact');
+    button.disabled = true;
+    button.textContent = t('contact_sending');
+    try {
+        // A filled bait field means a bot: answer as if it had worked and store nothing.
+        if (!$('contact-website').value) await api.sendContactMessage($('contact-email').value.trim(), message);
+        $('contact-form').reset();
+        toast(t('contact_success_alert'));
+    } catch (error) {
+        toast(t('contact_error', { msg: error.message }), 'bad');
+    } finally {
+        button.disabled = false;
+        button.textContent = t('contact_send_btn');
+    }
+}
+
+// --- Compose --------------------------------------------------------------------------------------------------
+function openCompose() {
+    $('compose-context').textContent = view === 'space' ? t('compose_space') : t('compose_time', { label, n: labelMinutes(label) });
+    $('compose-error').hidden = true;
+    $('compose').showModal();
+    $('post-content').focus();
+}
+
+function showPhoto() {
+    const file = $('post-media').files[0];
+    const preview = $('photo-preview');
+    const image = preview.querySelector('img');
+    if (image.src) URL.revokeObjectURL(image.src);
+    preview.hidden = !file;
+    if (file) image.src = URL.createObjectURL(file);
+    else image.removeAttribute('src');
+}
+
+function composeError(text) {
+    $('compose-error').textContent = text;
+    $('compose-error').hidden = false;
+}
+
+async function publish(event) {
+    event.preventDefault();
+    const content = $('post-content').value.trim();
+    const file = $('post-media').files[0];
+    if (!content && !file) return composeError(t('need_content'));
+    const button = $('btn-publish');
+    button.disabled = true;
+    button.textContent = t('publishing');
+    $('compose-error').hidden = true;
+    try {
+        if (view === 'space') {
+            const coords = await getCurrentLocation().catch(error => { throw new Error(gpsMessage(error)); });
+            await api.publishSpacePost({ content, authorId: authorId(), lat: coords.lat, lon: coords.lon, file });
         } else {
-            // Pubblica nel TEMPO (Label)
-            const currentLabel = window.location.pathname.substring(1) || 'time';
-            formData.append('label', currentLabel);
-            await publish('time', formData);
-            
-            // Ripulisci il modulo e aggiorna
-            document.getElementById('post-content').value = '';
-            document.getElementById('post-media').value = '';
-            loadTimeFeed(currentLabel);
+            await api.publishTimePost({ content, authorId: authorId(), label, file });
         }
+        $('compose-form').reset();
+        showPhoto();
+        $('compose').close();
+        toast(t('published'));
+        if (view === 'space') loadSpace({ quiet: true });
+        else { loadTime({ quiet: true }); loadRecentLabels(); }
     } catch (error) {
-        alert("Errore di pubblicazione: " + error.message);
+        composeError(t('publish_error', { msg: error.message }));
     } finally {
-        // Riabilita il bottone
-        btnPublish.disabled = false;
-        btnPublish.innerText = "Publish";
+        button.disabled = false;
+        button.textContent = t('post_btn');
     }
-});
-
-// Mostra vista Contatti
-document.getElementById('nav-contact').addEventListener('click', (e) => {
-    e.preventDefault();
-    hideAllViews();
-    publishSection.style.display = 'none';
-    mainToggles.style.display = 'none';
-    viewContact.style.display = 'block';
-});
-
-// Invio modulo Contatti
-document.getElementById('btn-send-contact').addEventListener('click', async () => {
-    const email = document.getElementById('contact-email').value.trim();
-    const message = document.getElementById('contact-message').value.trim();
-    const honeypot = document.getElementById('contact-website').value; // CATTURA L'ESCA
-    const btnSend = document.getElementById('btn-send-contact');
-    const lang = document.getElementById('lang-selector').value;
-    
-    if (!message) return alert("Inserisci un messaggio prima di inviare.");
-    
-    btnSend.disabled = true;
-    btnSend.innerText = "Invio in corso...";
-    
-    try {
-        // Passa l'honeypot alla funzione
-        await sendContactMessage(email, message, honeypot); 
-        alert(dictionary[lang].contact_success_alert);
-        document.getElementById('contact-message').value = ''; 
-        showSpace();
-    } catch (error) {
-        alert("Errore: " + error.message);
-    } finally {
-        btnSend.disabled = false;
-        btnSend.innerText = dictionary[lang].contact_send_btn;
-    }
-});
-
-function initSearchLabelUI() {
-    const searchInput = document.getElementById('input-search-label');
-    const goBtn = document.getElementById('btn-go-label');
-    if(searchInput) searchInput.setAttribute('data-i18n', 'search_label_placeholder');
-    if(goBtn) goBtn.setAttribute('data-i18n', 'go_label_btn');
 }
-initSearchLabelUI();
 
-// Imposta la lingua predefinita
-setLanguage('en');
+// --- Wiring ---------------------------------------------------------------------------------------------------
+$('home-link').addEventListener('click', event => { event.preventDefault(); navigate('space'); });
+document.querySelectorAll('#tabs a').forEach(tab => tab.addEventListener('click', event => {
+    event.preventDefault();
+    navigate(tab.dataset.view);
+}));
+window.addEventListener('popstate', show);
+
+$('btn-refresh-gps').addEventListener('click', () => loadSpace({ forceGps: true }));
+$('btn-subscribe').addEventListener('click', toggleSubscription);
+$('label-form').addEventListener('submit', event => {
+    event.preventDefault();
+    const name = cleanLabel($('input-search-label').value);
+    $('input-search-label').value = '';
+    if (name) navigate('time', name);
+});
+
+$('profile-form').addEventListener('submit', event => {
+    event.preventDefault();
+    store.set('xyzt_nickname', $('input-nickname').value.replace(/[()]/g, '').trim().slice(0, 30));
+    toast(t('profile_saved_alert'));
+    showMe();
+});
+document.querySelectorAll('#lang-seg button').forEach(button => button.addEventListener('click', () => {
+    lang = button.dataset.lang;
+    setLanguage(lang);
+    show();
+}));
+document.querySelectorAll('#theme-seg button').forEach(button => button.addEventListener('click', () => setTheme(button.dataset.themeChoice)));
+$('contact-form').addEventListener('submit', sendContact);
+
+$('fab').addEventListener('click', openCompose);
+$('compose-form').addEventListener('submit', publish);
+$('compose-cancel').addEventListener('click', () => $('compose').close());
+$('compose').addEventListener('click', event => { if (event.target === $('compose')) $('compose').close(); });
+$('post-media').addEventListener('change', showPhoto);
+$('photo-remove').addEventListener('click', () => { $('post-media').value = ''; showPhoto(); });
+
+setInterval(tickTimers, 30000);
+setInterval(() => {
+    if (document.visibilityState === 'visible') {
+        if (view === 'space' && $('space-feed').querySelector('.post')) loadSpace({ quiet: true });
+        if (view === 'time') loadTime({ quiet: true });
+    }
+    checkSubscriptions();
+}, 60000);
+
+setLanguage(lang);
+show();

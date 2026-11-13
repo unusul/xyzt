@@ -1,106 +1,191 @@
-<!DOCTYPE html>
+<!doctype html>
 <html lang="en">
 <head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>spacetime [xyzt]</title>
-    <link rel="stylesheet" href="/css/style.css">
-	<link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
-	<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+    <title>xyzt · spacetime</title>
+    <meta name="description" content="An ephemeral social network in two dimensions: what is written near you, and what is written under a label.">
+    <meta name="theme-color" content="#ffffff" media="(prefers-color-scheme: light)">
+    <meta name="theme-color" content="#1b1924" media="(prefers-color-scheme: dark)">
+    <script>
+        // The site lives at the root locally and under /<repo>/ on GitHub Pages; a label is the first path segment
+        // after it. Setting <base> here lets every relative link work from any address, including the 404 fallback.
+        (function () {
+            var onPages = location.hostname.slice(-10) === '.github.io';
+            document.write('<base href="' + (onPages ? '/' + location.pathname.split('/')[1] + '/' : '/') + '">');
+            try {
+                var theme = localStorage.getItem('xyzt_theme');
+                if (theme === 'light' || theme === 'dark') document.documentElement.dataset.theme = theme;
+            } catch (e) { /* private mode: follow the system */ }
+        })();
+    </script>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Figtree:wght@400;600;700;800&display=swap">
+    <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css">
+    <link rel="stylesheet" href="css/style.css">
+    <link rel="icon" href="favicon.svg" type="image/svg+xml">
+    <link rel="manifest" href="manifest.webmanifest">
+    <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js" defer></script>
 </head>
 <body>
-    <header>
-        <a href="/" id="home-link" style="text-decoration: none; color: inherit;">
-            <h1>spacetime [xyzt]</h1>
-        </a>
-        
-        <div style="display: flex; justify-content: center; gap: 15px; margin-bottom: 15px; font-size: 0.9em;">
-            <a href="#" id="nav-profile" style="color: #aaa; text-decoration: none;" data-i18n="nav_profile">Profile</a>
-            <a href="#" id="nav-faq" style="color: #aaa; text-decoration: none;" data-i18n="nav_faq">FAQ</a>
-			<a href="#" id="nav-map" style="color: #aaa; text-decoration: none;">Map</a>
-			<a href="#" id="nav-contact" style="color: #aaa; text-decoration: none;" data-i18n="nav_contact">Contact</a>
+<div class="app">
+    <header class="top">
+        <div class="wrap">
+            <a class="brand" id="home-link" href="./">
+                <b>xyzt</b>
+                <small>spacetime</small>
+            </a>
         </div>
-        
-        <div class="toggle-container" id="main-toggles">
-            <button id="mode-space" class="active">Space</button>
-            <button id="mode-time">Time</button>
-        </div>
-        
-        <select id="lang-selector" style="margin-top: 15px; background: #333; color: white; border: none; padding: 5px; border-radius: 5px;">
-            <option value="en">EN</option>
-            <option value="it">IT</option>
-        </select>
     </header>
 
-    <main id="view-profile" style="display: none; max-width: 600px; margin: 0 auto; padding: 20px;">
-        <h2 data-i18n="profile_title">Il tuo Profilo</h2>
-        <p style="color: #888; font-size: 0.9em;" data-i18n="profile_desc">Il tuo Nickname sarà visibile solo sui nuovi post.</p>
-        <input type="text" id="input-nickname" data-i18n="profile_nick_placeholder" placeholder="Scegli un nickname" style="width: 100%; padding: 10px; margin-bottom: 10px; border-radius: 8px; border: 1px solid #444; background: #1e1e1e; color: white;">
-        <button id="btn-save-profile" style="background: var(--primary); color: white; border: none; border-radius: 8px; padding: 10px 20px; width: 100%; font-weight: bold;" data-i18n="profile_save_btn">Salva Nickname</button>
-    </main>
+    <div class="content">
+        <section id="view-space" class="view" hidden>
+            <div class="view-head">
+                <div>
+                    <h1 data-i18n="space_title">Here and now</h1>
+                    <p class="muted small" data-i18n="space_sub"></p>
+                </div>
+                <button type="button" class="icon-btn" id="btn-refresh-gps" data-i18n-aria="gps_force" title="">
+                    <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="3.2"/><circle cx="12" cy="12" r="7.5"/><path d="M12 1.5v3M12 19.5v3M1.5 12h3M19.5 12h3"/></svg>
+                </button>
+            </div>
+            <div id="space-feed" class="feed"></div>
+        </section>
 
-    <main id="view-faq" style="display: none; max-width: 600px; margin: 0 auto; padding: 20px; line-height: 1.6;">
-        <h2 data-i18n="faq_title">Cos'è xyzt?</h2>
-        <p data-i18n="faq_intro">xyzt è un social network effimero diviso in due dimensioni esplorabili.</p>
-        
-        <p>
-            <strong data-i18n="faq_space_title">Space (Qui e Ora):</strong> 
-            <span data-i18n="faq_space_desc">I post sono ancorati alle coordinate fisiche da cui scrivi. Puoi leggere solo ciò che è stato pubblicato nel raggio di 5 chilometri dalla tua posizione attuale.</span>
-        </p>
-        <p>
-            <strong data-i18n="faq_time_title">Time (Etichette):</strong> 
-            <span data-i18n="faq_time_desc">I post sfidano la distanza fisica e sono raggruppati in stanze chiamate "Label" (es. #musica, #gemini). Chiunque nel mondo può entrare in una label e leggere i messaggi al suo interno.</span>
-        </p>
-        <p>
-            <strong data-i18n="faq_clock_title">L'Orologio:</strong> 
-            <span data-i18n="faq_clock_desc">Niente è permanente su xyzt. Ogni singolo post, che sia nello spazio o nel tempo, ha un tempo di scadenza ben visibile. Una volta che il timer scende a zero, il post viene eliminato per sempre.</span>
-        </p>
-    </main>
-	
-	<main id="view-contact" style="display: none; max-width: 600px; margin: 0 auto; padding: 20px;">
-        <h2 data-i18n="contact_title">Contattaci</h2>
-        <p style="color: #888; font-size: 0.9em; margin-bottom: 15px;" data-i18n="contact_desc">Inviaci feedback, segnalazioni o richieste d'aiuto.</p>
-        
-        <input type="email" id="contact-email" data-i18n="contact_email_placeholder" placeholder="Tua email (opzionale)" style="width: 100%; padding: 10px; margin-bottom: 10px; border-radius: 8px; border: 1px solid #444; background: #1e1e1e; color: white;">
-        <input type="text" id="contact-website" placeholder="Lascia vuoto questo campo" style="display: none;" autocomplete="off" tabindex="-1">
-        <textarea id="contact-message" data-i18n="contact_msg_placeholder" placeholder="Il tuo messaggio..." rows="5" style="width: 100%; padding: 10px; margin-bottom: 15px; border-radius: 8px; border: 1px solid #444; background: #1e1e1e; color: white; resize: vertical; font-family: inherit;"></textarea>
-        
-        <button id="btn-send-contact" style="background: var(--primary); color: white; border: none; border-radius: 8px; padding: 10px 20px; width: 100%; font-weight: bold; cursor: pointer;" data-i18n="contact_send_btn">Invia Messaggio</button>
-    </main>
+        <section id="view-time" class="view" hidden>
+            <div class="view-head">
+                <div>
+                    <h1 class="label-title">#<span id="current-label"></span></h1>
+                    <p class="muted small" id="time-sub"></p>
+                </div>
+                <button type="button" class="btn ghost sm" id="btn-subscribe"></button>
+            </div>
+            <form id="label-form" class="label-form">
+                <span class="hash">#</span>
+                <input type="text" id="input-search-label" autocomplete="off" autocapitalize="none" spellcheck="false" maxlength="40" data-i18n-ph="search_label_placeholder" data-i18n-aria="search_label_placeholder">
+                <button type="submit" class="btn" data-i18n="go_label_btn">Go</button>
+            </form>
+            <div id="recent-block" hidden>
+                <p class="label" data-i18n="recent_labels"></p>
+                <div id="recent-labels" class="pills"></div>
+            </div>
+            <div id="time-feed" class="feed"></div>
+        </section>
 
-    <section id="publish-section" class="publish-container" style="padding: 20px; max-width: 600px; margin: 0 auto;">
-        <textarea id="post-content" data-i18n="placeholder" placeholder="What's happening?" rows="3"></textarea>
-        <div style="display: flex; gap: 10px; margin-top: 10px;">
-            <input type="file" id="post-media" accept="image/*" capture="environment" style="flex: 1; color: white;">
-            <button id="btn-publish" data-i18n="post_btn">Publish</button>
+        <section id="view-map" class="view" hidden>
+            <div class="view-head">
+                <div>
+                    <h1 data-i18n="map_title">Map</h1>
+                    <p class="muted small" data-i18n="map_sub"></p>
+                </div>
+            </div>
+            <div id="map"></div>
+        </section>
+
+        <section id="view-me" class="view" hidden>
+            <div class="view-head"><h1 data-i18n="me_title">Me</h1></div>
+
+            <div class="card">
+                <h2 data-i18n="profile_title">Nickname</h2>
+                <p class="muted small" id="profile-desc"></p>
+                <form id="profile-form" class="inline-form">
+                    <input type="text" id="input-nickname" maxlength="30" autocomplete="nickname" data-i18n-ph="profile_nick_placeholder" data-i18n-aria="profile_nick_placeholder">
+                    <button type="submit" class="btn" data-i18n="profile_save_btn">Save</button>
+                </form>
+            </div>
+
+            <div class="card">
+                <h2 data-i18n="settings_title">Language and theme</h2>
+                <div class="seg" id="lang-seg" role="group">
+                    <button type="button" data-lang="en">English</button>
+                    <button type="button" data-lang="it">Italiano</button>
+                </div>
+                <div class="seg" id="theme-seg" role="group">
+                    <button type="button" data-theme-choice="auto" data-i18n="theme_auto">System</button>
+                    <button type="button" data-theme-choice="light" data-i18n="theme_light">Light</button>
+                    <button type="button" data-theme-choice="dark" data-i18n="theme_dark">Dark</button>
+                </div>
+            </div>
+
+            <div class="card prose">
+                <h2 data-i18n="faq_title">What is xyzt?</h2>
+                <p data-i18n="faq_intro"></p>
+                <h3 data-i18n="faq_space_title"></h3>
+                <p data-i18n="faq_space_desc"></p>
+                <h3 data-i18n="faq_time_title"></h3>
+                <p data-i18n="faq_time_desc"></p>
+                <h3 data-i18n="faq_clock_title"></h3>
+                <p data-i18n="faq_clock_desc"></p>
+            </div>
+
+            <div class="card">
+                <h2 data-i18n="contact_title">Contact us</h2>
+                <p class="muted small" data-i18n="contact_desc"></p>
+                <form id="contact-form" class="stack">
+                    <input type="email" id="contact-email" maxlength="200" autocomplete="email" data-i18n-ph="contact_email_placeholder" data-i18n-aria="contact_email_placeholder">
+                    <!-- Bait for bots: people never see or fill this field. -->
+                    <input type="text" id="contact-website" class="bait" autocomplete="off" tabindex="-1" aria-hidden="true">
+                    <textarea id="contact-message" rows="5" maxlength="4000" data-i18n-ph="contact_msg_placeholder" data-i18n-aria="contact_msg_placeholder"></textarea>
+                    <button type="submit" class="btn" id="btn-send-contact" data-i18n="contact_send_btn">Send message</button>
+                </form>
+            </div>
+        </section>
+    </div>
+
+    <nav class="tabs" id="tabs">
+        <a href="./" data-view="space">
+            <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 21s-6.5-5.6-6.5-11a6.5 6.5 0 0 1 13 0c0 5.400-6.5 11-6.500 11z"/><circle cx="12" cy="10" r="2.4"/></svg>
+            <span data-i18n="tab_space">Space</span>
+        </a>
+        <a href="./time" data-view="time">
+            <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="8.5"/><path d="M12 7v5l3.2 2"/></svg>
+            <span data-i18n="tab_time">Time</span>
+        </a>
+        <a href="./#map" data-view="map">
+            <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M9 4 3.500 6v14L9 18l6 2 5.500-2V4L15 6 9 4z"/><path d="M9 4v14M15 6v14"/></svg>
+            <span data-i18n="tab_map">Map</span>
+        </a>
+        <a href="./#me" data-view="me">
+            <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="8.5" r="3.6"/><path d="M4.500 20c1.200-3.600 4-5.400 7.500-5.400s6.300 1.800 7.500 5.400"/></svg>
+            <span data-i18n="tab_me">Me</span>
+        </a>
+    </nav>
+</div>
+
+<button type="button" class="fab" id="fab" data-i18n-aria="compose" hidden>
+    <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 5v14M5 12h14"/></svg>
+</button>
+
+<dialog id="compose" class="sheet">
+    <form id="compose-form" class="stack">
+        <div>
+            <h2 data-i18n="compose">Write a post</h2>
+            <p class="muted small" id="compose-context"></p>
         </div>
-    </section>
-
-    <main id="view-space" style="max-width: 600px; margin: 0 auto; padding: 0 20px;">
-        <div style="display: flex; justify-content: space-between; align-items: center;">
-            <h2 data-i18n="space_title">Here and Now</h2>
-            <button id="btn-refresh-gps" style="background: transparent; color: var(--primary); border: 1px solid var(--primary); padding: 5px 10px; border-radius: 5px; cursor: pointer; font-size: 0.8em;" data-i18n="gps_force">Forza GPS</button>
+        <textarea id="post-content" rows="4" maxlength="2000" data-i18n-ph="placeholder" data-i18n-aria="placeholder"></textarea>
+        <p id="compose-error" class="error" role="alert" hidden></p>
+        <div id="photo-preview" class="photo-preview" hidden>
+            <img alt="">
+            <button type="button" class="icon-btn" id="photo-remove" data-i18n-aria="remove_photo">
+                <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 6l12 12M18 6 6 18"/></svg>
+            </button>
         </div>
-        <div id="space-feed"></div>
-    </main>
+        <div class="sheet-actions">
+            <label class="btn ghost photo-btn" data-i18n-aria="add_photo">
+                <input type="file" id="post-media" accept="image/*" hidden>
+                <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 8h3l1.500-2h7L17 8h3v11H4z"/><circle cx="12" cy="13" r="3.500"/></svg>
+                <span data-i18n="add_photo">Add a photo</span>
+            </label>
+            <span class="spacer"></span>
+            <button type="button" class="btn ghost" id="compose-cancel" data-i18n="cancel">Cancel</button>
+            <button type="submit" class="btn" id="btn-publish" data-i18n="post_btn">Publish</button>
+        </div>
+    </form>
+</dialog>
 
-    <main id="view-time" style="display: none; max-width: 600px; margin: 0 auto; padding: 0 20px;">
-		<div style="display: flex; gap: 10px; margin-bottom: 20px; margin-top: 10px;">
-			<input type="text" id="input-search-label" placeholder="Crea o cerca label..." style="flex: 1; padding: 10px; border-radius: 8px; border: 1px solid #444; background: #1e1e1e; color: white;">
-			<button id="btn-go-label" style="background: var(--primary); color: white; border: none; border-radius: 8px; padding: 0 20px; font-weight: bold; cursor: pointer;">Vai</button>
-		</div>
+<div id="toast" role="status" hidden></div>
 
-		<div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 15px;">
-			<h2 id="time-label-title" style="margin: 0;">Time Label: <span id="current-label" style="color: var(--primary);"></span></h2>
-			<button id="btn-subscribe" style="background: transparent; border: 1px solid #ffeb3b; color: #ffeb3b; border-radius: 8px; padding: 6px 12px; cursor: pointer; font-size: 0.85em; transition: all 0.2s;">🔔 Ascolta</button>
-		</div>
-
-		<div id="recent-labels" style="margin-bottom: 20px; display: flex; flex-wrap: wrap; gap: 8px;"></div>
-		<div id="time-feed"></div>
-	</main>
-	
-	<main id="view-map" style="display: none; width: 100%; height: 70vh; max-width: 800px; margin: 0 auto; border-radius: 12px; overflow: hidden;"></main>
-
-    <script type="module" src="/js/app.js"></script>
+<script type="module" src="js/app.js"></script>
 </body>
 </html>

@@ -1,0 +1,36 @@
+# Every hour: deletes expired posts and the photos nothing refers to any more. It is what the 5-minute loop
+# of the old Node server did; expired posts are already invisible to visitors, this only frees the space.
+# The call also counts as activity, so the free Supabase project is not paused after a week without visits.
+# Needs, in Settings → Secrets and variables → Actions, the secret SUPABASE_SERVICE_KEY (the project's
+# secret/service_role key: it never reaches the browser).
+name: Purge expired posts
+
+on:
+  schedule:
+    - cron: '17 * * * *'
+  workflow_dispatch:
+
+permissions: {}
+
+env:
+  SUPABASE_URL: https://qpkulphnmtxcprsyhxcj.supabase.co
+  BUCKET: xyzt-media
+
+jobs:
+  purge:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Delete expired posts and orphan photos
+        env:
+          KEY: ${{ secrets.SUPABASE_SERVICE_KEY }}
+        run: |
+          set -euo pipefail
+          orphans=$(curl -fsS -X POST "$SUPABASE_URL/rest/v1/rpc/purge_expired" \
+            -H "apikey: $KEY" -H "Authorization: Bearer $KEY" -H "Content-Type: application/json" -d '{}')
+          count=$(echo "$orphans" | jq 'length')
+          echo "Orphan photos: $count"
+          if [ "$count" -gt 0 ]; then
+            curl -fsS -X DELETE "$SUPABASE_URL/storage/v1/object/$BUCKET" \
+              -H "apikey: $KEY" -H "Authorization: Bearer $KEY" -H "Content-Type: application/json" \
+              -d "$(echo "$orphans" | jq -c '{prefixes: .}')" > /dev/null
+          fi
